@@ -1,7 +1,10 @@
 from optparse import Option, OptionValueError
+from optparse import OptionParser, Values, isbasestring
 import os.path
 from copy import copy
-from optparse import OptionParser
+import logging
+logging.basicConfig(level=logging.DEBUG)
+log = logging.getLogger(__name__)
 
 def throw_option_value_exception(f,*args,**kwargs):
     try:
@@ -91,11 +94,11 @@ def str_datetime_to_epoch(option,opt_str,value,parser):
     epoch = mktime(date_time.timetuple())
     return int(epoch)
 
-def extend_action(value,values):
+def extend_action(dest,value,values):
     value_list = value.split(',')
     values.ensure_value(dest,[]).extend(value_list)
 
-def sublist_action(value,values):
+def sublist_action(dest,value,values):
     LIST_SEPERATORS = ","
     SUBLIST_SEPERATORS = [':',',,']
     sublists = [l.split(*LIST_SEPERATORS) for l
@@ -133,20 +136,23 @@ class EnhancedOption(Option,object):
     __metaclass__ = OptionEnhancer
 
     def take_action(self,action,dest,opt,value,values,parser):
+        log.debug('take_action: %s',action)
         if action in custom_actions:
-            custom_actions.get(action)(value,values)
+            custom_actions.get(action)(dest,value,values)
         else:
             Option.take_action(self,action,dest,opt,value,values,parser)
+        log.debug('values: %s',values)
 
-class DictGetOptions(dict):
-    def __init__(self,obj):
-        self.obj = obj
+
+class DictValues(Values):
+    def get(self,*args,**kwargs):
+        return self.__getitem__(*args,**kwargs)
 
     def __getitem__(self,k,d=None):
-        return self.__dict__.get(k)
+        return getattr(self,k,d)
 
     def __contains__(self,k):
-        return self.__dict__.__contains__(k)
+        return hasattr(self,k)
 
 class EnhancedOptionParser(OptionParser):
     """ adds new types and actions. also lets you use
@@ -155,6 +161,19 @@ class EnhancedOptionParser(OptionParser):
         kwargs['option_class'] = EnhancedOption
         OptionParser.__init__(self,*args,**kwargs)
 
-    def parse_args(self,*args,**kwargs):
-        (options,args) = OptionParser.parse_args(self,*args,**kwargs)
-        return (DictGetOptions(options),args)
+    def get_default_values(self):
+        """
+        We want to use our Values child instead which
+        creates a get and __contains__ method
+        """
+        if not self.process_default_values:
+            return DictValues(self.values)
+
+        defaults = self.defaults.copy()
+        for option in self._get_all_options():
+            default = defaults.get(option.dest)
+            if isbasestring(default):
+                opt_str = option.get_opt_string()
+                defaults[option.dest] = option.check_value(opt_str, default)
+
+        return DictValues(defaults)
